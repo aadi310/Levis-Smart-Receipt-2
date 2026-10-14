@@ -401,7 +401,7 @@ function downloadReceipt(r: LevisReceipt, logoSrc: string, rdepLogoSrc: string) 
  * history popup. Replace with the real API response.
  * -------------------------------------------------------------------------------- */
 const SAMPLE_COMMON = {
-  customer: { firstName: "Rashad", mobile: "7250230751" },
+  customer: { firstName: "Rashid", mobile: "9993587328" },
   rewards: { feedback: 50, refer: 100, profile: 50 },
   contact: {
     tollFree: "1800 1020 501",
