@@ -4,10 +4,12 @@
  * Levi's x RDEP — Receipt redesign, Option 2: "Red Tab, Light"
  *
  * Concept: a poster on a warm light canvas. Big condensed greeting, a tilted red ticker, a
- * woven care label for the store, then the actual receipt as torn thermal paper (mono type,
+ * actual receipt as torn thermal paper (mono type,
  * dotted leaders, [+] / [−] toggles). White cards with soft shadows pop off the canvas, red is
- * used for emphasis and actions. The very bottom is a white stub with the terms, barcode and
- * "Powered by" logo. Popups are white slips with the same torn top edge.
+ * used for emphasis and actions. Below the RedTab zone sits a woven care label for the store
+ * (address always visible, code / phone / timing expand and collapse). The very bottom is a
+ * white stub with the terms (open by default), barcode and "Powered by" logo. Popups are
+ * white slips with the same torn top edge.
  *
  * Fixed layout: the receipt is designed at 400px wide. On phones (<= 520px) it is scaled with
  * CSS `zoom` to fill the screen, on larger screens it stays a centred 400px column, so it
@@ -1219,11 +1221,13 @@ function ReceiptView({
 }: ReceiptViewProps) {
   const [openItem, setOpenItem] = useState(-1);
   const [modal, setModal] = useState<ModalId>(null);
-  const [termsOpen, setTermsOpen] = useState(false);
+  const [termsOpen, setTermsOpen] = useState(true);
+  const [storeOpen, setStoreOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [sentTo, setSentTo] = useState("");
   const closeModal = useCallback(() => setModal(null), []);
   const termsId = useId();
+  const storeId = useId();
   const scale = useFitScale();
 
   const { store, rewards, contact, terms, referral } = data;
@@ -1275,58 +1279,18 @@ function ReceiptView({
 
         <Marquee items={[store.name, store.branch]} />
 
-        {/* ---------- Store: woven care label ---------- */}
-        <section
-          aria-label="Store"
-          className="mx-4 mt-7 rotate-1 bg-white p-1.5 text-[var(--lv-black)] shadow-[0_14px_30px_-14px_rgba(46,46,46,0.45)]"
-        >
-          <div className="border-2 border-dashed border-black/50 px-4 py-3.5">
-            <h2 className="sr-only">
-              {store.name}, {store.branch}
-            </h2>
-            <p className="flex items-start gap-2.5 text-base font-semibold leading-snug">
-              <Icon name="pin" className="mt-0.5 h-5 w-5 shrink-0 text-[var(--lv-red)]" />
-              {store.address}
-            </p>
-            <dl className="mt-3 space-y-2 border-t-2 border-[var(--lv-black)] pt-3 text-sm">
-              <Leader label="Store code" value={store.code} strong />
-              <Leader
-                label="Phone no."
-                value={
-                  <a href={`tel:${store.phone}`} className={`rounded active:text-[var(--lv-red)] [@media(hover:hover)]:hover:text-[var(--lv-red)] ${onPaper}`}>
-                    {store.phone}
-                  </a>
-                }
-                strong
-              />
-              <Leader label="Store timing" value={store.timing} strong />
-            </dl>
-            <p className="mt-3 text-xs text-[var(--lv-gray)]">
-              Legal name: <span className="font-semibold text-[var(--lv-black)]">{store.legalName}</span>
-            </p>
-          </div>
-        </section>
-
         {/* ---------- The receipt: thermal paper ---------- */}
         <section
           aria-label="Receipt"
-          className="mx-3 mt-8 text-[var(--lv-black)]"
+          className="mx-3 mt-10 text-[var(--lv-black)]"
           style={{ filter: "drop-shadow(0 12px 14px rgba(46,46,46,0.18))" }}
         >
           <ZigZag />
           <div className="bg-white px-5 pb-6 pt-4">
-            {/* meta + QR */}
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <h2 className={`${display.className} text-[34px] uppercase leading-none tracking-wide text-[var(--lv-red)]`}>Tax invoice</h2>
-                <dl className={`${m} mt-4 space-y-1.5 text-xs`}>
-                  <Leader label="Invoice no" value={data.invoiceNo} strong />
-                  <Leader label="Receipt ID" value={data.receiptId} strong />
-                  <Leader label="Date" value={data.date} strong />
-                  <Leader label="Cashier" value={data.cashier} strong />
-                </dl>
-              </div>
-              <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-black/20 bg-white p-1">
+            {/* heading + QR on one line, then the invoice details */}
+            <div className="flex items-center justify-between gap-4">
+              <h2 className={`${display.className} text-[34px] uppercase leading-none tracking-wide text-[var(--lv-red)]`}>Tax invoice</h2>
+              <div className="h-11 w-11 shrink-0 overflow-hidden rounded bg-white ring-1 ring-black/20">
                 {qrSrc ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={qrSrc} alt="Receipt QR code" className="h-full w-full object-contain" />
@@ -1335,6 +1299,12 @@ function ReceiptView({
                 )}
               </div>
             </div>
+            <dl className={`${m} mt-4 space-y-1.5 text-xs`}>
+              <Leader label="Invoice no" value={data.invoiceNo} strong />
+              <Leader label="Receipt ID" value={data.receiptId} strong />
+              <Leader label="Date" value={data.date} strong />
+              <Leader label="Cashier" value={data.cashier} strong />
+            </dl>
 
             {/* items */}
             <div className={`${m} mt-5 flex justify-between border-y-2 border-[var(--lv-black)] py-2 text-xs font-semibold uppercase tracking-wide`}>
@@ -1437,6 +1407,56 @@ function ReceiptView({
                 <Icon name="mail" className="h-[18px] w-[18px]" />
                 Write to us
               </a>
+            </div>
+          </section>
+
+          {/* ---------- Store: woven care label (details expand / collapse) ---------- */}
+          <section
+            aria-label="Store"
+            className="rotate-1 bg-white p-1.5 text-[var(--lv-black)] shadow-[0_14px_30px_-14px_rgba(46,46,46,0.45)]"
+          >
+            <div className="border-2 border-dashed border-black/50 px-4 py-3.5">
+              <h2 className="sr-only">
+                {store.name}, {store.branch}
+              </h2>
+              <p className="flex items-start gap-2.5 text-base font-semibold leading-snug">
+                <Icon name="pin" className="mt-0.5 h-5 w-5 shrink-0 text-[var(--lv-red)]" />
+                {store.address}
+              </p>
+
+              <button
+                type="button"
+                onClick={() => setStoreOpen((o) => !o)}
+                aria-expanded={storeOpen}
+                aria-controls={storeId}
+                className={`mt-3 flex w-full items-center justify-between border-t-2 border-[var(--lv-black)] pt-3 text-left transition-colors motion-reduce:transition-none ${onPaper} ${
+                  storeOpen ? "text-[var(--lv-red)]" : ""
+                }`}
+              >
+                <span className={`${m} text-sm font-semibold uppercase tracking-wide`}>Store details</span>
+                <span aria-hidden="true" className={`${m} text-sm font-bold`}>
+                  [{storeOpen ? "−" : "+"}]
+                </span>
+              </button>
+              <Collapse open={storeOpen} id={storeId}>
+                <dl className="space-y-2 pb-1 pt-3 text-sm">
+                  <Leader label="Store code" value={store.code} strong />
+                  <Leader
+                    label="Phone no."
+                    value={
+                      <a href={`tel:${store.phone}`} className={`rounded active:text-[var(--lv-red)] [@media(hover:hover)]:hover:text-[var(--lv-red)] ${onPaper}`}>
+                        {store.phone}
+                      </a>
+                    }
+                    strong
+                  />
+                  <Leader label="Store timing" value={store.timing} strong />
+                </dl>
+              </Collapse>
+
+              <p className="mt-3 border-t border-dashed border-black/30 pt-3 text-xs text-[var(--lv-gray)]">
+                Legal name: <span className="font-semibold text-[var(--lv-black)]">{store.legalName}</span>
+              </p>
             </div>
           </section>
         </div>
