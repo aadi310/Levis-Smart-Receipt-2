@@ -23,10 +23,14 @@
  *  - Download builds a standalone receipt document for the receipt on screen (same approach
  *    as the Y3 receipt). It has a "Save as PDF" button that opens the print dialog.
  *  - Feedback is a referral-style box with a star row that opens the Levi's feedback page.
+ *  - Marketing carousel right after the feedback box: an embedded YouTube video + the Levi's
+ *    banner. The video autoplays (muted) when the section is on screen; once it plays, the
+ *    carousel stops auto-advancing until someone swipes / taps a dot.
  *
  * Needs (in /public):
  *   customers/Levi's Logo.png
  *   rdep-dark-logo.png
+ *   images/levis-banner.png (1920x1080)
  * Stack: Next.js (app router) + Tailwind. No other dependencies.
  *
  * Usage:  app/levis-receipt-2/page.tsx
@@ -48,7 +52,10 @@ import {
   useState,
   type ChangeEvent,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import Image from "next/image";
 import { Anton, Inter, JetBrains_Mono } from "next/font/google";
@@ -76,6 +83,13 @@ const theme = {
 const DEFAULT_LEVIS_LOGO = encodeURI("/images/levis-logo.png");
 const DEFAULT_RDEP_LOGO = "/images/rdep-logo.png";
 const DEFAULT_FEEDBACK_URL = "https://levis.ercollecta.com/Tably/Feedback/VoiceOfcustomers/en/Feedback.aspx";
+
+/* Marketing carousel. Slide order = array order. The video is first so it can autoplay as soon as
+ * the section is on screen; put "image" first if you want the banner to lead instead. */
+const MARKETING_BANNER = "/images/levis-banner.png"; // 1920x1080
+const MARKETING_VIDEO_ID = "fRXDPnzFuzQ"; // https://youtu.be/fRXDPnzFuzQ
+const MARKETING_SLIDES = ["video", "image"] as const;
+const MARKETING_IMAGE_MS = 4000; // how long the banner stays before the carousel moves on
 
 /* ------------------------------- types ------------------------------------------- */
 export interface ReceiptItem {
@@ -1030,6 +1044,275 @@ function FeedbackLink({ href, points, onClick }: { href: string; points: number;
   );
 }
 
+/* --------------------------- marketing carousel ---------------------------------- */
+/* Minimal typings for the YouTube IFrame Player API (loaded on demand, no npm package). */
+interface YtPlayer {
+  playVideo(): void;
+  pauseVideo(): void;
+  getPlayerState(): number; // 1 = playing
+  getIframe(): HTMLIFrameElement;
+  destroy(): void;
+}
+interface YtPlayerEvent {
+  target: YtPlayer;
+  data: number;
+}
+interface YtNamespace {
+  Player: new (
+    el: HTMLElement,
+    opts: {
+      videoId: string;
+      width?: string | number;
+      height?: string | number;
+      playerVars?: Record<string, string | number>;
+      events?: { onReady?: (e: YtPlayerEvent) => void; onStateChange?: (e: YtPlayerEvent) => void };
+    },
+  ) => YtPlayer;
+}
+declare global {
+  interface Window {
+    YT?: YtNamespace;
+    onYouTubeIframeAPIReady?: () => void;
+  }
+}
+
+let ytApiPromise: Promise<YtNamespace> | null = null;
+
+/** Loads https://www.youtube.com/iframe_api once and resolves with the YT namespace. */
+function loadYouTubeApi(): Promise<YtNamespace> {
+  if (typeof window === "undefined") return Promise.reject(new Error("No window"));
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  if (!ytApiPromise) {
+    ytApiPromise = new Promise<YtNamespace>((resolve, reject) => {
+      const previous = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = () => {
+        previous?.();
+        if (window.YT) resolve(window.YT);
+      };
+      const script = document.createElement("script");
+      script.src = "https://www.youtube.com/iframe_api";
+      script.async = true;
+      script.onerror = () => {
+        ytApiPromise = null;
+        reject(new Error("YouTube API failed to load"));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return ytApiPromise;
+}
+
+/** True while the element is inside the viewport (expanded by `rootMargin`, needs `threshold` visible). */
+function useInView<T extends Element>(ref: RefObject<T | null>, rootMargin: string, threshold: number): boolean {
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setInView(true);
+      return;
+    }
+    const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), { rootMargin, threshold });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref, rootMargin, threshold]);
+  return inView;
+}
+
+/** Carousel with the YouTube video (embedded, plays in place) and the Levi's banner.
+ *  - The video autoplays (muted, as browsers require) as soon as its slide is on screen, and
+ *    pauses when the slide or the section leaves the screen.
+ *  - Once the video has played, the carousel stops auto-advancing. Swiping, or tapping a dot,
+ *    turns auto-advance back on.
+ *  - The video's top area is covered by a transparent layer so swipes work over the video
+ *    (iframes swallow touches); a tap on it toggles play / pause. The bottom strip is left
+ *    free for YouTube's own controls (volume, fullscreen, ...). */
+function MarketingCarousel() {
+  const count = MARKETING_SLIDES.length;
+  const sectionRef = useRef<HTMLElement>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<YtPlayer | null>(null);
+  const startRef = useRef<{ x: number; y: number } | null>(null);
+  const [index, setIndex] = useState(0);
+  const [autoAdvance, setAutoAdvance] = useState(true);
+  const [armed, setArmed] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  const near = useInView(sectionRef, "300px 0px", 0); // start loading the player a little early
+  const visible = useInView(sectionRef, "0px", 0.5); // "on this section" = at least half visible
+  const onVideo = MARKETING_SLIDES[index] === "video";
+
+  useEffect(() => {
+    if (near) setArmed(true);
+  }, [near]);
+
+  // Create the embedded player once the section is close to the screen.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!armed || !host) return;
+    let cancelled = false;
+    let player: YtPlayer | null = null;
+    const mount = document.createElement("div");
+    host.appendChild(mount);
+    loadYouTubeApi()
+      .then((YT) => {
+        if (cancelled) return;
+        player = new YT.Player(mount, {
+          videoId: MARKETING_VIDEO_ID,
+          width: "100%",
+          height: "100%",
+          playerVars: { autoplay: 0, mute: 1, playsinline: 1, rel: 0, modestbranding: 1, origin: window.location.origin },
+          events: {
+            onReady: (e) => {
+              if (cancelled) return;
+              playerRef.current = e.target;
+              setReady(true);
+            },
+            // Video started playing (autoplay or a manual tap): stop the carousel from moving on.
+            onStateChange: (e) => {
+              if (e.data === 1) setAutoAdvance(false);
+            },
+          },
+        });
+      })
+      .catch(() => {
+        /* API blocked or offline: the thumbnail stays and the banner slide still works */
+      });
+    return () => {
+      cancelled = true;
+      playerRef.current = null;
+      setReady(false);
+      try {
+        player?.destroy();
+      } catch {
+        /* already gone */
+      }
+      mount.remove();
+    };
+  }, [armed]);
+
+  // Play the video while its slide is on screen, pause it otherwise.
+  useEffect(() => {
+    const p = playerRef.current;
+    if (!ready || !p) return;
+    p.getIframe().tabIndex = onVideo ? 0 : -1;
+    if (onVideo && visible) p.playVideo();
+    else p.pauseVideo();
+  }, [ready, onVideo, visible]);
+
+  // Auto-advance only from the banner (the video slide never auto-advances) and only until the
+  // video has played; swiping or tapping a dot turns it back on.
+  useEffect(() => {
+    if (!autoAdvance || !visible || onVideo) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const t = window.setTimeout(() => setIndex((i) => (i + 1) % count), MARKETING_IMAGE_MS);
+    return () => window.clearTimeout(t);
+  }, [autoAdvance, visible, onVideo, index, count]);
+
+  const goTo = useCallback(
+    (i: number) => {
+      setAutoAdvance(true);
+      setIndex(((i % count) + count) % count);
+    },
+    [count],
+  );
+
+  const togglePlayback = () => {
+    const p = playerRef.current;
+    if (!p) return;
+    if (p.getPlayerState() === 1) p.pauseVideo();
+    else p.playVideo();
+  };
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    startRef.current = { x: e.clientX, y: e.clientY };
+  };
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const s = startRef.current;
+    startRef.current = null;
+    if (!s) return;
+    const dx = e.clientX - s.x;
+    const dy = e.clientY - s.y;
+    if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy)) {
+      goTo(index + (dx < 0 ? 1 : -1));
+      return;
+    }
+    if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && (e.target as HTMLElement).dataset.tapZone !== undefined) togglePlayback();
+  };
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (e.key === "ArrowLeft") goTo(index - 1);
+    else if (e.key === "ArrowRight") goTo(index + 1);
+  };
+
+  return (
+    <section ref={sectionRef} aria-roledescription="carousel" aria-label="Levi's highlights" onKeyDown={onKeyDown}>
+      <div
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => {
+          startRef.current = null;
+        }}
+        className={`relative touch-pan-y select-none overflow-hidden rounded-3xl bg-black ${lift}`}
+      >
+        <div
+          className="flex transition-transform duration-500 ease-out motion-reduce:transition-none"
+          style={{ transform: `translateX(-${index * 100}%)` }}
+        >
+          {MARKETING_SLIDES.map((kind, i) => (
+            <div
+              key={kind}
+              role="group"
+              aria-roledescription="slide"
+              aria-label={`${i + 1} of ${count}`}
+              aria-hidden={i !== index}
+              className="relative aspect-video w-full shrink-0"
+            >
+              {kind === "image" ? (
+                <Image
+                  src={MARKETING_BANNER}
+                  alt="Levi's marketing banner"
+                  width={1920}
+                  height={1080}
+                  sizes="(max-width: 520px) 100vw, 400px"
+                  draggable={false}
+                  className="pointer-events-none block h-full w-full select-none object-cover"
+                />
+              ) : (
+                <div
+                  className="relative h-full w-full bg-[#111] bg-cover bg-center"
+                  style={{ backgroundImage: `url(https://i.ytimg.com/vi/${MARKETING_VIDEO_ID}/hqdefault.jpg)` }}
+                >
+                  <div ref={hostRef} className="absolute inset-0 [&_iframe]:h-full [&_iframe]:w-full" />
+                  <div data-tap-zone="" aria-hidden="true" className="absolute inset-x-0 top-0 bottom-[20%] cursor-pointer touch-pan-y" />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 flex justify-center gap-1">
+        {MARKETING_SLIDES.map((kind, i) => (
+          <button
+            key={kind}
+            type="button"
+            aria-label={`Show ${kind === "video" ? "video" : "banner"} (slide ${i + 1} of ${count})`}
+            aria-current={i === index ? "true" : undefined}
+            onClick={() => goTo(i)}
+            className={`grid h-6 w-8 place-items-center rounded-full ${onPaper}`}
+          >
+            <span
+              className={`block h-2 rounded-full transition-all motion-reduce:transition-none ${
+                i === index ? "w-6 bg-[var(--lv-red)]" : "w-2 bg-black/25"
+              }`}
+            />
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /* --------------------------- RedTab tabs section --------------------------------- */
 /* Two lines each, always, so the three tabs line up. */
 const TABS: { id: TabId; lines: [string, string] }[] = [
@@ -1377,6 +1660,8 @@ function ReceiptView({
         {/* ---------- After the receipt: RedTab zone ---------- */}
         <div className="space-y-7 px-4 pt-8">
           <FeedbackLink href={feedbackUrl} points={rewards.feedback} onClick={onFeedbackClick} />
+
+          <MarketingCarousel />
 
           <a
             href={whatsappHref}
