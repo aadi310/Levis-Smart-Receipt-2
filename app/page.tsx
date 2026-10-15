@@ -3,8 +3,8 @@
 /**
  * Levi's x RDEP — Receipt redesign, Option 2: "Red Tab, Light"
  *
- * Concept: a poster on a warm light canvas. Big condensed greeting, a tilted red ticker, a
- * actual receipt as torn thermal paper (mono type,
+ * Concept: a poster on a warm light canvas. Big condensed greeting, then the marketing
+ * carousel, the loyalty points section and the actual receipt as torn thermal paper (mono type,
  * dotted leaders, [+] / [−] toggles). White cards with soft shadows pop off the canvas, red is
  * used for emphasis and actions. Below the RedTab zone sits a woven care label for the store
  * (address always visible, code / phone / timing expand and collapse). The very bottom is a
@@ -23,7 +23,7 @@
  *  - Download builds a standalone receipt document for the receipt on screen (same approach
  *    as the Y3 receipt). It has a "Save as PDF" button that opens the print dialog.
  *  - Feedback is a referral-style box with a star row that opens the Levi's feedback page.
- *  - Marketing carousel right after the feedback box: an embedded YouTube video + the Levi's
+ *  - Marketing carousel right after the greeting: an embedded YouTube video + the Levi's
  *    banner. The video autoplays (muted) when the section is on screen; once it plays, the
  *    carousel stops auto-advancing until someone swipes / taps a dot.
  *
@@ -826,31 +826,6 @@ function ZigZag({ down = false }: { down?: boolean }) {
   );
 }
 
-/** Tilted red ticker with the store name. Decorative, so hidden from screen readers. */
-function Marquee({ items }: { items: string[] }) {
-  const half = (
-    <div className="flex shrink-0 items-center">
-      {items.map((t, i) => (
-        <span key={i} className="flex items-center">
-          <span className="whitespace-nowrap px-4">{t}</span>
-          <span className="h-2 w-2 rotate-45 bg-white/80" />
-        </span>
-      ))}
-    </div>
-  );
-  return (
-    <div aria-hidden="true" className="-mx-4 -rotate-2 overflow-hidden bg-[var(--lv-red)] py-2.5 text-white shadow-[0_10px_20px_-12px_rgba(196,18,48,0.8)]">
-      <div
-        className={`lv-marquee-track ${display.className} flex w-max text-[19px] uppercase leading-none tracking-wider`}
-        style={{ animation: "lv-marquee 30s linear infinite" }}
-      >
-        {half}
-        {half}
-      </div>
-    </div>
-  );
-}
-
 /** Popups are white slips with a torn top edge, matching the receipt paper. */
 function Modal({ title, onClose, scale, children }: { title: string; onClose: () => void; scale: number; children: ReactNode }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -1532,7 +1507,7 @@ function ReceiptView({
       onTouchStart={() => {}} /* lets :active press states fire on iOS Safari */
       className={`${body.className} min-h-screen overflow-x-hidden bg-[var(--lv-page)] text-[var(--lv-black)] antialiased [-webkit-text-size-adjust:100%] sm:py-8`}
     >
-      <style>{`@keyframes lv-marquee{to{transform:translateX(-50%)}}@keyframes lv-star{0%,10%{fill:transparent}24%,64%{fill:currentColor}80%,100%{fill:transparent}}.lv-star{fill:transparent;animation:lv-star 3.2s ease-in-out infinite}@media (prefers-reduced-motion:reduce){.lv-marquee-track{animation:none!important}.lv-star{animation:none;fill:currentColor}}`}</style>
+      <style>{`@keyframes lv-star{0%,10%{fill:transparent}24%,64%{fill:currentColor}80%,100%{fill:transparent}}.lv-star{fill:transparent;animation:lv-star 3.2s ease-in-out infinite}@media (prefers-reduced-motion:reduce){.lv-star{animation:none;fill:currentColor}}`}</style>
 
       <main
         style={zoomStyle(scale)}
@@ -1560,7 +1535,12 @@ function ReceiptView({
           </h1>
         </header>
 
-        <Marquee items={[store.name, store.branch]} />
+        {/* ---------- Right after the greeting: marketing carousel, then loyalty points ---------- */}
+        <div className="space-y-7 px-4">
+          <MarketingCarousel />
+
+          <RedTabSection data={data} onUpdateProfile={onUpdateProfile} />
+        </div>
 
         {/* ---------- The receipt: thermal paper ---------- */}
         <section
@@ -1570,7 +1550,7 @@ function ReceiptView({
         >
           <ZigZag />
           <div className="bg-white px-5 pb-6 pt-4">
-            {/* heading + QR on one line, then the invoice details */}
+            {/* heading + QR on one line, then straight into the items */}
             <div className="flex items-center justify-between gap-4">
               <h2 className={`${display.className} text-[34px] uppercase leading-none tracking-wide text-[var(--lv-red)]`}>Tax invoice</h2>
               <div className="h-11 w-11 shrink-0 overflow-hidden rounded bg-white ring-1 ring-black/20">
@@ -1582,15 +1562,8 @@ function ReceiptView({
                 )}
               </div>
             </div>
-            <dl className={`${m} mt-4 space-y-1.5 text-xs`}>
-              <Leader label="Invoice no" value={data.invoiceNo} strong />
-              <Leader label="Receipt ID" value={data.receiptId} strong />
-              <Leader label="Date" value={data.date} strong />
-              <Leader label="Cashier" value={data.cashier} strong />
-            </dl>
-
             {/* items */}
-            <div className={`${m} mt-5 flex justify-between border-y-2 border-[var(--lv-black)] py-2 text-xs font-semibold uppercase tracking-wide`}>
+            <div className={`${m} mt-4 flex justify-between border-y-2 border-[var(--lv-black)] py-2 text-xs font-semibold uppercase tracking-wide`}>
               <span>Item name</span>
               <span>Net amount</span>
             </div>
@@ -1625,8 +1598,16 @@ function ReceiptView({
               </button>
             </div>
 
+            {/* invoice details */}
+            <dl className={`${m} mt-5 space-y-1.5 border-t border-dashed border-black/40 pt-4 text-xs`}>
+              <Leader label="Invoice no" value={data.invoiceNo} strong />
+              <Leader label="Receipt ID" value={data.receiptId} strong />
+              <Leader label="Date" value={data.date} strong />
+              <Leader label="Cashier" value={data.cashier} strong />
+            </dl>
+
             {/* payment */}
-            <h3 className={`${display.className} mt-6 text-[22px] uppercase leading-none tracking-wide`}>Payment</h3>
+            <h3 className={`${display.className} mt-5 text-[22px] uppercase leading-none tracking-wide`}>Payment</h3>
             <dl className={`${m} mt-3 space-y-2 text-sm`}>
               {data.payments.map((p) => (
                 <Leader key={p.mode} label={p.mode} value={inr(p.amount)} strong />
@@ -1661,8 +1642,6 @@ function ReceiptView({
         <div className="space-y-7 px-4 pt-8">
           <FeedbackLink href={feedbackUrl} points={rewards.feedback} onClick={onFeedbackClick} />
 
-          <MarketingCarousel />
-
           <a
             href={whatsappHref}
             target="_blank"
@@ -1678,8 +1657,6 @@ function ReceiptView({
               <Icon name="arrow" className="h-6 w-6" />
             </span>
           </a>
-
-          <RedTabSection data={data} onUpdateProfile={onUpdateProfile} />
 
           <section aria-label="Reach out to us">
             <h2 className={`${display.className} text-[28px] uppercase leading-none tracking-wide`}>Reach out to us</h2>
@@ -1701,9 +1678,10 @@ function ReceiptView({
             className="rotate-1 bg-white p-1.5 text-[var(--lv-black)] shadow-[0_14px_30px_-14px_rgba(46,46,46,0.45)]"
           >
             <div className="border-2 border-dashed border-black/50 px-4 py-3.5">
-              <h2 className="sr-only">
-                {store.name}, {store.branch}
-              </h2>
+              <h2 className={`${display.className} text-[26px] uppercase leading-none tracking-wide`}>{store.name}</h2>
+              <p className={`${m} mb-3 mt-1.5 border-b border-dashed border-black/30 pb-3 text-xs font-semibold uppercase tracking-wide text-[var(--lv-red)]`}>
+                {store.branch}
+              </p>
               <p className="flex items-start gap-2.5 text-base font-semibold leading-snug">
                 <Icon name="pin" className="mt-0.5 h-5 w-5 shrink-0 text-[var(--lv-red)]" />
                 {store.address}
